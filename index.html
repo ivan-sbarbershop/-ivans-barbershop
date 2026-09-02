@@ -27,30 +27,46 @@
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
   :root{
-    --ink:#151210;
-    --panel:#1d1815;
-    --panel-2:#241d19;
-    --line:#3a2f27;
-    --brass:#c9974d;
-    --brass-bright:#e3b768;
-    --cream:#f2e9dc;
-    --cream-dim:#b8ab99;
-    --red:#a34638;
-    --red-bright:#c25843;
-    --green:#5f8f5b;
+    --ink:#171224;
+    --panel:#201a30;
+    --panel-2:#2a2240;
+    --line:#443a5c;
+    --brass:#8f7fe0;
+    --brass-bright:#b6a8ff;
+    --cream:#f3f0fb;
+    --cream-dim:#b7aed0;
+    --red:#b34a6e;
+    --red-bright:#d15f86;
+    --green:#6fae74;
     font-size:16px;
   }
   *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
   html,body{margin:0;padding:0;}
   body{
+    position:relative;
     background:
-      radial-gradient(circle at 20% 0%, rgba(201,151,77,0.10), transparent 45%),
+      radial-gradient(circle at 20% 0%, rgba(143,127,224,0.14), transparent 45%),
       var(--ink);
     color:var(--cream);
     font-family:'Inter',system-ui,-apple-system,sans-serif;
     min-height:100vh;
     padding-bottom:30px;
   }
+  /* Marca de agua del logo, muy sutil, detrás de todo el contenido */
+  body::before{
+    content:"";
+    position:fixed;
+    inset:0;
+    background-image:url('icons/icon-512.png');
+    background-repeat:no-repeat;
+    background-position:center 18%;
+    background-size:min(480px, 85vw) min(480px, 85vw);
+    opacity:0.05;
+    filter:grayscale(1) contrast(1.1);
+    pointer-events:none;
+    z-index:0;
+  }
+  header.top, .pole, main{ position:relative; z-index:1; }
   h1,h2,h3,.display{font-family:'Bebas Neue',system-ui,sans-serif; letter-spacing:0.04em;}
 
   .pole{
