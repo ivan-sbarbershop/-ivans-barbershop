@@ -110,6 +110,10 @@
     font-size:clamp(28px, 8.2vw, 44px); line-height:0.95; margin:6px 0 2px; color:var(--cream);
     text-shadow:0 2px 0 rgba(0,0,0,0.4);
   }
+  header.top .brand-logo{
+    display:block; margin:4px auto 2px; width:min(160px, 42vw); height:auto;
+    filter:drop-shadow(0 4px 10px rgba(0,0,0,0.5));
+  }
   header.top .sub{color:var(--cream-dim); font-size:13px; letter-spacing:0.02em;}
 
   .auth-bar{margin-top:14px; display:flex; justify-content:center; align-items:center; gap:10px;}
@@ -337,8 +341,7 @@
 
 <header class="top">
   <button id="navBarbero" class="barber-access" title="Panel del barbero">✂️</button>
-  <div class="eyebrow">Barbería</div>
-  <h1>IVAN'S BARBERSHOP</h1>
+  <img src="icons/icon-512.png" alt="Ivan's Barbershop" class="brand-logo">
   <div class="sub">Reserva tu turno · Corte con estilo</div>
   <div class="auth-bar" id="authBar">
     <button id="btnAuthOpen" class="auth-pill">Iniciar sesión</button>
