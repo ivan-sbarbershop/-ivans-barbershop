@@ -90,6 +90,14 @@
     display:flex; align-items:center; justify-content:center;
   }
   .barber-access:active{opacity:0.9;}
+  .gallery-access{
+    position:absolute; top:14px; left:14px;
+    width:30px; height:30px; border-radius:50%;
+    background:rgba(0,0,0,0.25); border:1px solid var(--line);
+    color:var(--cream-dim); font-size:13px; opacity:0.55; cursor:pointer;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .gallery-access:active{opacity:0.9;}
   .back-to-client{
     display:inline-block; font-size:12px; color:var(--cream-dim);
     margin-bottom:14px; cursor:pointer; text-decoration:underline;
@@ -564,14 +572,17 @@ const SCHEDULE = {
   3: {blocks: [{start: 9*60+20, end: 11*60+20}, {start: 14*60, end: 15*60+20}, {start: 17*60, end: 21*60}]},
   4: {blocks: [{start: 9*60+20, end: 11*60+20}, {start: 14*60, end: 15*60+20}, {start: 17*60, end: 21*60}]},
   5: {blocks: [{start: 9*60+20, end: 11*60+20}, {start: 14*60, end: 15*60+20}, {start: 17*60, end: 21*60}]},
-  // Sábado y domingo:
+  // Sábado:
   //  · Mañana: 8:00am - 12:40pm (última cita), receso 1:20pm-2:00pm
   //  · Tarde:  2:20pm - 10:00pm (última cita cae en 9:40pm, porque con
   //            intervalos de 40min desde las 2:20pm no se alcanza a caer
   //            justo en las 10:00pm; 9:40pm es la última cita completa
   //            antes del cierre)
   6: {blocks: [{start: 8*60, end: 12*60+40}, {start: 14*60+20, end: 22*60}]},
-  0: {blocks: [{start: 8*60, end: 12*60+40}, {start: 14*60+20, end: 22*60}]},
+  // Domingo:
+  //  · Mañana: 8:00am - 12:40pm (última cita), receso 1:20pm-2:00pm
+  //  · Tarde:  2:20pm - 7:00pm (última cita)
+  0: {blocks: [{start: 8*60, end: 12*60+40}, {start: 14*60+20, end: 19*60}]},
 };
 
 const DIAS = ["Domingo","Lunes","Martes","Miércoles","Jueves","Viernes","Sábado"];
