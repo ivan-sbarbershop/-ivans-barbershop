@@ -342,7 +342,7 @@
 <header class="top">
   <button id="navBarbero" class="barber-access" title="Panel del barbero">✂️</button>
   <img src="icons/icon-512.png" alt="Ivan's Barbershop" class="brand-logo">
-  <div class="sub">Reserva tu turno · Corte con estilo</div>
+  <div class="sub">HAZ QUE TU PRÓXIMO CORTE SEA DIFERENTE. ENCUENTRA TU ESTILO Y MARCA LA DIFERENCIA.</div>
   <div class="auth-bar" id="authBar">
     <button id="btnAuthOpen" class="auth-pill">Iniciar sesión</button>
   </div>
@@ -566,14 +566,18 @@ const auth = getAuth(fbApp);
 const db = getFirestore(fbApp);
 
 const SCHEDULE = {
-  // Lunes a viernes:
+  // Lunes a jueves:
+  //  · Mañana:  9:20am - 11:20am (última cita), receso 12:00pm-2:00pm
+  //  · Tarde 1: 2:00pm - 3:20pm (última cita), receso 4:00pm-5:00pm
+  //  · Tarde 2: 5:00pm - 8:20pm (última cita)
+  1: {blocks: [{start: 9*60+20, end: 11*60+20}, {start: 14*60, end: 15*60+20}, {start: 17*60, end: 20*60+20}]},
+  2: {blocks: [{start: 9*60+20, end: 11*60+20}, {start: 14*60, end: 15*60+20}, {start: 17*60, end: 20*60+20}]},
+  3: {blocks: [{start: 9*60+20, end: 11*60+20}, {start: 14*60, end: 15*60+20}, {start: 17*60, end: 20*60+20}]},
+  4: {blocks: [{start: 9*60+20, end: 11*60+20}, {start: 14*60, end: 15*60+20}, {start: 17*60, end: 20*60+20}]},
+  // Viernes (sin cambios):
   //  · Mañana:  9:20am - 11:20am (última cita), receso 12:00pm-2:00pm
   //  · Tarde 1: 2:00pm - 3:20pm (última cita), receso 4:00pm-5:00pm
   //  · Tarde 2: 5:00pm - 9:00pm (última cita)
-  1: {blocks: [{start: 9*60+20, end: 11*60+20}, {start: 14*60, end: 15*60+20}, {start: 17*60, end: 21*60}]},
-  2: {blocks: [{start: 9*60+20, end: 11*60+20}, {start: 14*60, end: 15*60+20}, {start: 17*60, end: 21*60}]},
-  3: {blocks: [{start: 9*60+20, end: 11*60+20}, {start: 14*60, end: 15*60+20}, {start: 17*60, end: 21*60}]},
-  4: {blocks: [{start: 9*60+20, end: 11*60+20}, {start: 14*60, end: 15*60+20}, {start: 17*60, end: 21*60}]},
   5: {blocks: [{start: 9*60+20, end: 11*60+20}, {start: 14*60, end: 15*60+20}, {start: 17*60, end: 21*60}]},
   // Sábado:
   //  · Mañana: 8:00am - 12:40pm (última cita), receso 1:20pm-2:00pm
