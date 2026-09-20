@@ -472,6 +472,8 @@
 
       <div class="card">
         <h2>Resumen de citas <span class="tag">Barbero</span></h2>
+        <label for="resumenFecha">Filtrar por fecha</label>
+        <input type="date" id="resumenFecha">
         <div id="listaCitas"></div>
       </div>
 
@@ -519,20 +521,6 @@
         <div id="historialResultado" style="margin-top:14px;"></div>
       </div>
 
-      <div class="card" style="border-color:var(--red);">
-        <h2>Migración única desde el Sheet</h2>
-        <div class="small-note">
-          Trae hacia Firestore todo lo que haya ahora mismo en tu Google Sheet
-          (citas y bloqueos), para no perder nada del historial anterior.
-          Solo debes usar esto <b>una vez</b>. Es seguro darle varias veces sin
-          duplicar nada, pero si lo usas cuando Firestore ya tiene datos más
-          recientes que el Sheet, esos datos recientes podrían quedar
-          sobreescritos por la versión vieja del Sheet.
-        </div>
-        <button class="secondary" id="btnMigrarHistorial" style="margin-top:10px;">Migrar historial del Sheet a Firestore</button>
-        <div id="migracionResultado" style="margin-top:12px; font-size:13px; color:var(--cream-dim);"></div>
-      </div>
-
       <button class="secondary" id="btnSalirPanel">Cerrar sesión del panel</button>
     </div>
   </section>
@@ -547,7 +535,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import {
   getFirestore, doc, setDoc, getDoc, deleteDoc, updateDoc,
-  collection, onSnapshot, runTransaction, writeBatch
+  collection, onSnapshot, runTransaction
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 /* =========================================================
@@ -1158,6 +1146,18 @@ const panelBarbero = document.getElementById("panelBarbero");
 const pinInput = document.getElementById("pinInput");
 const pinError = document.getElementById("pinError");
 
+// Filtro de fecha del "Resumen de citas": no deja elegir días pasados,
+// y por defecto arranca mostrando el día de hoy en adelante.
+const resumenFecha = document.getElementById("resumenFecha");
+resumenFecha.min = todayStr();
+resumenFecha.value = todayStr();
+resumenFecha.addEventListener("change", () => {
+  if(resumenFecha.value && resumenFecha.value < todayStr()){
+    resumenFecha.value = todayStr();
+  }
+  renderListaCitas();
+});
+
 let barberUnlocked = false;
 let pollTimer = null;
 
@@ -1263,12 +1263,22 @@ function renderListaCitas(){
   const wrap = document.getElementById("listaCitas");
   wrap.innerHTML = "";
 
+  const fechaFiltro = resumenFecha.value;
+
   // El resumen solo muestra lo que aún necesita atención (pendiente/retrasada).
   // Lo ya realizado se archiva y se consulta desde "Buscar histórico".
-  const citasActivas = CITAS.filter(a => getStatus(a) !== "realizada");
+  let citasActivas = CITAS.filter(a => getStatus(a) !== "realizada");
+
+  // Si hay una fecha elegida en el filtro, solo mostramos ese día —
+  // así no se ve todo revuelto cuando hay muchas citas acumuladas.
+  if(fechaFiltro){
+    citasActivas = citasActivas.filter(a => a.date === fechaFiltro);
+  }
 
   if(citasActivas.length === 0){
-    wrap.innerHTML = '<div class="empty">No hay citas pendientes por atender. Lo ya realizado lo puedes ver en "Buscar histórico".</div>';
+    wrap.innerHTML = fechaFiltro
+      ? `<div class="empty">No hay citas pendientes ese día.</div>`
+      : '<div class="empty">No hay citas pendientes por atender. Lo ya realizado lo puedes ver en "Buscar histórico".</div>';
     return;
   }
 
@@ -1566,111 +1576,6 @@ historialFecha.addEventListener("change", () => {
     `;
     wrap.appendChild(item);
   });
-});
-
-/* =========================================================
-   MIGRACIÓN ÚNICA: Sheet (Apps Script) → Firestore
-   Trae todo lo que haya en el Google Sheet ahora mismo y lo
-   escribe en Firestore con los mismos IDs de documento que usa
-   el resto de la app (fecha_minutos para citas y horas, fecha
-   para días bloqueados) — así no se duplica nada si se corre
-   más de una vez.
-   ========================================================= */
-document.getElementById("btnMigrarHistorial").addEventListener("click", () => {
-  const ok = confirm(
-    "Esto va a traer TODO lo que hay ahora mismo en tu Google Sheet " +
-    "(citas y bloqueos) y guardarlo en Firestore. Úsalo solo la primera " +
-    "vez, después del cambio a Firestore. ¿Continuar?"
-  );
-  if(!ok) return;
-
-  const btn = document.getElementById("btnMigrarHistorial");
-  const resultado = document.getElementById("migracionResultado");
-  btn.disabled = true;
-  btn.textContent = "Migrando…";
-  resultado.textContent = "Consultando tu Google Sheet, puede tardar un momento…";
-
-  apiGet("getData")
-    .then((data) => {
-      const citas = data.citas || [];
-      const bloqueosDias = data.bloqueos || [];
-      const bloqueosHoras = data.horasBloqueadas || [];
-      const total = citas.length + bloqueosDias.length + bloqueosHoras.length;
-
-      if(total === 0){
-        resultado.textContent = "No se encontró nada en el Sheet para migrar.";
-        btn.disabled = false;
-        btn.textContent = "Migrar historial del Sheet a Firestore";
-        return;
-      }
-
-      resultado.textContent = `Escribiendo ${total} registro(s) en Firestore…`;
-
-      // Firestore permite hasta 500 operaciones por lote (writeBatch),
-      // así que si hay más, se reparten en varios lotes seguidos.
-      const operaciones = [];
-      citas.forEach((c) => {
-        const id = `${c.date}_${c.minutes}`;
-        operaciones.push({
-          ref: doc(db, "citas", id),
-          data: {
-            date: c.date, minutes: Number(c.minutes), time: c.time,
-            name: c.name, phone: c.phone, email: c.email || "",
-            status: c.status || "pendiente",
-            createdAt: c.createdAt || new Date().toISOString()
-          }
-        });
-      });
-      bloqueosDias.forEach((b) => {
-        operaciones.push({
-          ref: doc(db, "bloqueosDias", b.date),
-          data: { date: b.date, reason: b.reason || "" }
-        });
-      });
-      bloqueosHoras.forEach((h) => {
-        const id = `${h.date}_${h.minutes}`;
-        operaciones.push({
-          ref: doc(db, "bloqueosHoras", id),
-          data: { date: h.date, minutes: Number(h.minutes), time: h.time, reason: h.reason || "" }
-        });
-      });
-
-      const lotes = [];
-      for(let i = 0; i < operaciones.length; i += 450){
-        lotes.push(operaciones.slice(i, i + 450));
-      }
-
-      let loteIndex = 0;
-      function correrSiguienteLote(){
-        if(loteIndex >= lotes.length){
-          resultado.textContent = `Listo: se migraron ${total} registro(s) a Firestore.`;
-          btn.disabled = false;
-          btn.textContent = "Migrar historial del Sheet a Firestore";
-          return;
-        }
-        const batch = writeBatch(db);
-        lotes[loteIndex].forEach((op) => batch.set(op.ref, op.data));
-        batch.commit()
-          .then(() => {
-            loteIndex++;
-            resultado.textContent = `Migrando… (${Math.min(loteIndex * 450, total)}/${total})`;
-            correrSiguienteLote();
-          })
-          .catch((err) => {
-            console.error(err);
-            resultado.textContent = "Ocurrió un error a mitad de la migración. Puedes volver a darle al botón, es seguro repetirlo (no duplica nada).";
-            btn.disabled = false;
-            btn.textContent = "Migrar historial del Sheet a Firestore";
-          });
-      }
-      correrSiguienteLote();
-    })
-    .catch((err) => {
-      console.error(err);
-      resultado.textContent = "No se pudo consultar el Sheet. Revisa que WEBAPP_URL esté bien configurado e intenta de nuevo.";
-      btn.disabled = false;
-      btn.textContent = "Migrar historial del Sheet a Firestore";
-    });
 });
 
 /* =========================================================
