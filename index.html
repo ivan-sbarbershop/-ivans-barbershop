@@ -519,6 +519,20 @@
         <div id="historialResultado" style="margin-top:14px;"></div>
       </div>
 
+      <div class="card" style="border-color:var(--red);">
+        <h2>Migración única desde el Sheet</h2>
+        <div class="small-note">
+          Trae hacia Firestore todo lo que haya ahora mismo en tu Google Sheet
+          (citas y bloqueos), para no perder nada del historial anterior.
+          Solo debes usar esto <b>una vez</b>. Es seguro darle varias veces sin
+          duplicar nada, pero si lo usas cuando Firestore ya tiene datos más
+          recientes que el Sheet, esos datos recientes podrían quedar
+          sobreescritos por la versión vieja del Sheet.
+        </div>
+        <button class="secondary" id="btnMigrarHistorial" style="margin-top:10px;">Migrar historial del Sheet a Firestore</button>
+        <div id="migracionResultado" style="margin-top:12px; font-size:13px; color:var(--cream-dim);"></div>
+      </div>
+
       <button class="secondary" id="btnSalirPanel">Cerrar sesión del panel</button>
     </div>
   </section>
@@ -532,7 +546,8 @@ import {
   onAuthStateChanged, signOut, sendPasswordResetEmail
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import {
-  getFirestore, doc, setDoc, getDoc
+  getFirestore, doc, setDoc, getDoc, deleteDoc, updateDoc,
+  collection, onSnapshot, runTransaction, writeBatch
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 /* =========================================================
@@ -722,8 +737,10 @@ onAuthStateChanged(auth, (user) => {
       renderAuthBar();
       applyProfileToForm();
     });
+    attachFirestoreListeners();
   }else{
     currentProfile = null;
+    detachFirestoreListeners();
     renderAuthBar();
   }
 });
@@ -771,7 +788,7 @@ function applyProfileToForm(){
 document.getElementById("btnAuthOpen").addEventListener("click", () => openAuthModal("login"));
 
 /* =========================================================
-   ESTADO EN MEMORIA (se llena desde el Google Sheet)
+   ESTADO EN MEMORIA (se llena en tiempo real desde Firestore)
    ========================================================= */
 let CITAS = [];
 let BLOQUEOS = [];
@@ -779,7 +796,12 @@ let HORAS_BLOQUEADAS = [];
 let dataLoaded = false;
 
 /* =========================================================
-   CONEXIÓN AL BACKEND (Google Apps Script) VÍA FETCH
+   APPS SCRIPT — YA NO SE USA PARA LEER (eso ahora es Firestore
+   en tiempo real, más abajo). Se sigue usando para mandar una
+   COPIA en segundo plano de cada acción: correos al barbero y
+   al cliente, y respaldo en tu Google Sheet de siempre. Si esta
+   llamada falla, no le afecta nada al cliente ni al barbero —
+   su acción ya quedó guardada en Firestore de todas formas.
    ========================================================= */
 function apiGet(action){
   return fetch(WEBAPP_URL + "?action=" + encodeURIComponent(action))
@@ -794,26 +816,55 @@ function apiPost(action, payload){
   }).then(function(r){ return r.json(); });
 }
 
-function refreshDataFromServer(onDone, onFail){
-  if(!WEBAPP_URL || WEBAPP_URL.indexOf("PEGA_AQUI") === 0){
-    alert("Falta configurar WEBAPP_URL en el código con el link de tu Apps Script.");
-    return;
-  }
+/* =========================================================
+   FIRESTORE EN TIEMPO REAL (fuente de verdad para disponibilidad
+   y reservas — instantáneo, sin los "cuelgues" que daba Apps Script
+   con varias personas consultando a la vez)
+   ========================================================= */
+let unsubCitas = null, unsubBloqueosDias = null, unsubBloqueosHoras = null;
+
+function attachFirestoreListeners(){
+  if(unsubCitas) return; // ya están activas, no duplicar
   setSyncStatus("loading");
-  apiGet("getData")
-    .then(function(data){
-      CITAS = data.citas || [];
-      BLOQUEOS = data.bloqueos || [];
-      HORAS_BLOQUEADAS = data.horasBloqueadas || [];
-      dataLoaded = true;
-      setSyncStatus("ok");
-      if(onDone) onDone();
-    })
-    .catch(function(err){
-      setSyncStatus("error");
-      if(onFail) onFail(err);
-      else console.error(err);
-    });
+
+  unsubCitas = onSnapshot(collection(db, "citas"), (snap) => {
+    CITAS = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    dataLoaded = true;
+    setSyncStatus("ok");
+    onLiveDataChanged();
+  }, (err) => { console.error(err); setSyncStatus("error"); });
+
+  unsubBloqueosDias = onSnapshot(collection(db, "bloqueosDias"), (snap) => {
+    BLOQUEOS = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    onLiveDataChanged();
+  }, (err) => console.error(err));
+
+  unsubBloqueosHoras = onSnapshot(collection(db, "bloqueosHoras"), (snap) => {
+    HORAS_BLOQUEADAS = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    onLiveDataChanged();
+  }, (err) => console.error(err));
+}
+
+function detachFirestoreListeners(){
+  if(unsubCitas) unsubCitas();
+  if(unsubBloqueosDias) unsubBloqueosDias();
+  if(unsubBloqueosHoras) unsubBloqueosHoras();
+  unsubCitas = unsubBloqueosDias = unsubBloqueosHoras = null;
+  CITAS = []; BLOQUEOS = []; HORAS_BLOQUEADAS = [];
+  dataLoaded = false;
+}
+
+// Cada vez que Firestore avisa de un cambio real (alguien reservó,
+// canceló, bloqueó un día/hora...), volvemos a pintar solo lo que
+// esté visible en pantalla en ese momento — sin volver a preguntarle
+// nada a Firestore, ya lo tenemos todo en memoria.
+function onLiveDataChanged(){
+  if(typeof fechaInput !== "undefined" && fechaInput && fechaInput.value){
+    renderClientDay();
+  }
+  if(typeof barberUnlocked !== "undefined" && barberUnlocked){
+    refreshBarberPanel();
+  }
 }
 
 function setSyncStatus(state){
@@ -910,7 +961,7 @@ function irAVistaCliente(){
 }
 function irAVistaBarbero(){
   tabBarbero.classList.add("active"); tabCliente.classList.remove("active");
-  if(barberUnlocked) refreshDataFromServer(refreshBarberPanel);
+  if(barberUnlocked) refreshBarberPanel();
 }
 
 navBarbero.addEventListener("click", irAVistaBarbero);
@@ -952,17 +1003,11 @@ function resetClientView(){
 }
 window.addEventListener("pageshow", resetClientView);
 
-// Al cambiar la fecha, primero traemos los datos más recientes del Sheet
-// (para no mostrar un horario "libre" que alguien ya tomó hace un minuto).
+// Los datos ya están en vivo gracias a Firestore (onSnapshot), así que
+// simplemente volvemos a pintar con lo que ya tenemos en memoria — al
+// instante, sin esperar ninguna respuesta de red.
 fechaInput.addEventListener("change", () => {
-  fechaInput.disabled = true;
-  refreshDataFromServer(() => {
-    fechaInput.disabled = false;
-    renderClientDay();
-  }, () => {
-    fechaInput.disabled = false;
-    alert("No se pudo conectar. Revisa tu conexión a internet e intenta de nuevo.");
-  });
+  renderClientDay();
 });
 
 function renderClientDay(){
@@ -1040,28 +1085,38 @@ function updateButtonState(){
 
 btnReservar.addEventListener("click", () => {
   const dateStr = fechaInput.value;
+  const minutes = selectedSlot;
   const cita = {
     date: dateStr,
-    minutes: selectedSlot,
-    time: minutesToLabel(selectedSlot),
+    minutes: minutes,
+    time: minutesToLabel(minutes),
     name: nombreInput.value.trim(),
     phone: celularInput.value.trim(),
-    email: currentUser ? currentUser.email : ""
+    email: currentUser ? currentUser.email : "",
+    status: "pendiente",
+    createdAt: new Date().toISOString()
   };
 
   btnReservar.disabled = true;
   btnReservar.textContent = "Guardando…";
 
-  apiPost("crearCita", cita)
-    .then((res) => {
+  // El ID del documento ya identifica el horario exacto (fecha_minutos),
+  // así que la transacción puede revisar "¿ya existe?" y crearlo de forma
+  // atómica: si dos personas tocan "Confirmar" al mismo tiempo, Firestore
+  // garantiza que solo una gane esa hora.
+  const citaId = `${dateStr}_${minutes}`;
+  const citaRef = doc(db, "citas", citaId);
+
+  runTransaction(db, (transaction) => {
+    return transaction.get(citaRef).then((snap) => {
+      if(snap.exists()) throw new Error("OCUPADO");
+      transaction.set(citaRef, cita);
+    });
+  })
+    .then(() => {
       btnReservar.textContent = "Confirmar cita";
-      if(!res.ok){
-        alert(res.message || "No se pudo registrar la cita. Intenta de nuevo.");
-        updateButtonState();
-        refreshDataFromServer(() => renderSlots(dateStr));
-        return;
-      }
-      const appt = res.appt;
+      const appt = { ...cita, id: citaId };
+
       document.getElementById("cNombre").textContent = appt.name;
       document.getElementById("cCelular").textContent = appt.phone;
       document.getElementById("cFecha").textContent = prettyDate(appt.date);
@@ -1075,11 +1130,21 @@ btnReservar.addEventListener("click", () => {
       diaInfo.style.display = "none";
       confirmCard.style.display = "block";
       confirmCard.scrollIntoView({behavior:"smooth", block:"start"});
+
+      // Copia de respaldo hacia Apps Script (correo al barbero, correo al
+      // cliente, fila en el Sheet), en SEGUNDO PLANO. Si falla, no le
+      // afecta nada al cliente: su cita ya quedó guardada arriba.
+      apiPost("crearCita", appt).catch(() => {});
     })
     .catch((err) => {
       btnReservar.textContent = "Confirmar cita";
       updateButtonState();
-      alert("No se pudo conectar para guardar la cita. Revisa tu internet e intenta de nuevo.");
+      if(err && err.message === "OCUPADO"){
+        alert("Ese horario acaba de ser reservado por otra persona. Elige otro, por favor.");
+        renderSlots(dateStr);
+      }else{
+        alert("No se pudo conectar para guardar la cita. Revisa tu internet e intenta de nuevo.");
+      }
     });
 });
 
@@ -1108,11 +1173,15 @@ function checkPin(){
     if("Notification" in window && Notification.permission === "default"){
       Notification.requestPermission();
     }
-    refreshDataFromServer(refreshBarberPanel);
+    refreshBarberPanel();
     if(pollTimer) clearInterval(pollTimer);
+    // Los datos ya están al día en todo momento gracias a Firestore en
+    // tiempo real. Este intervalo ya NO vuelve a consultar nada — solo
+    // repinta con lo que ya hay en memoria, útil para que el estado
+    // "Retrasada" se vaya actualizando solo con el paso del tiempo.
     pollTimer = setInterval(() => {
-      if(barberUnlocked) refreshDataFromServer(refreshBarberPanel);
-    }, 25000); // se auto-actualiza cada 25 segundos
+      if(barberUnlocked) refreshBarberPanel();
+    }, 25000);
   }else{
     pinError.textContent = "PIN incorrecto. Intenta de nuevo.";
     pinInput.value = "";
@@ -1129,7 +1198,7 @@ document.getElementById("btnSalirPanel").addEventListener("click", () => {
 });
 
 document.getElementById("btnRefrescar").addEventListener("click", () => {
-  refreshDataFromServer(refreshBarberPanel);
+  refreshBarberPanel();
 });
 
 // Avisa con sonido + notificación del navegador cuando aparece una cita nueva
@@ -1234,8 +1303,10 @@ function renderListaCitas(){
       delBtn.addEventListener("click", () => {
         if(confirm(`¿Cancelar la cita de ${a.name} el ${prettyDate(a.date)} a las ${a.time}?`)){
           delBtn.disabled = true;
-          apiPost("cancelarCita", { id: a.id })
-            .then(() => refreshDataFromServer(refreshBarberPanel))
+          deleteDoc(doc(db, "citas", a.id))
+            .then(() => {
+              apiPost("cancelarCita", { id: a.id }).catch(() => {});
+            })
             .catch(() => { alert("No se pudo cancelar. Intenta de nuevo."); delBtn.disabled = false; });
         }
       });
@@ -1251,8 +1322,10 @@ document.getElementById("listaCitas").addEventListener("change", (e) => {
   const id = e.target.dataset.id;
   const val = e.target.value;
   e.target.disabled = true;
-  apiPost("actualizarEstado", { id: id, status: val })
-    .then(() => refreshDataFromServer(refreshBarberPanel))
+  updateDoc(doc(db, "citas", id), { status: val })
+    .then(() => {
+      apiPost("actualizarEstado", { id: id, status: val }).catch(() => {});
+    })
     .catch(() => { alert("No se pudo actualizar el estado. Intenta de nuevo."); e.target.disabled = false; });
 });
 
@@ -1305,19 +1378,19 @@ document.getElementById("btnBloquear").addEventListener("click", () => {
   btn.disabled = true;
   btn.textContent = "Bloqueando…";
 
-  apiPost("bloquearDia", { date: dateStr, reason: motivo })
-    .then((res) => {
+  const bloqueo = { date: dateStr, reason: motivo };
+  setDoc(doc(db, "bloqueosDias", dateStr), bloqueo)
+    .then(() => {
       btn.disabled = false;
       btn.textContent = "Bloquear día";
-      if(!res.ok){ alert(res.message || "No se pudo bloquear el día."); return; }
       bloqueoFecha.value = "";
       document.getElementById("bloqueoMotivo").value = "";
-      refreshDataFromServer(refreshBarberPanel);
+      apiPost("bloquearDia", bloqueo).catch(() => {});
     })
     .catch(() => {
       btn.disabled = false;
       btn.textContent = "Bloquear día";
-      alert("No se pudo conectar. Intenta de nuevo.");
+      alert("No se pudo bloquear el día. Intenta de nuevo.");
     });
 });
 
@@ -1345,8 +1418,10 @@ function renderBloqueos(){
     unBtn.textContent = "Desbloquear";
     unBtn.addEventListener("click", () => {
       unBtn.disabled = true;
-      apiPost("desbloquearDia", { date: b.date })
-        .then(() => refreshDataFromServer(refreshBarberPanel))
+      deleteDoc(doc(db, "bloqueosDias", b.date))
+        .then(() => {
+          apiPost("desbloquearDia", { date: b.date }).catch(() => {});
+        })
         .catch(() => { alert("No se pudo desbloquear. Intenta de nuevo."); unBtn.disabled = false; });
     });
     item.appendChild(unBtn);
@@ -1398,20 +1473,21 @@ document.getElementById("btnBloquearHora").addEventListener("click", () => {
   btn.disabled = true;
   btn.textContent = "Bloqueando…";
 
-  apiPost("bloquearHora", { date: dateStr, minutes: Number(minutes), time: time, reason: motivo })
-    .then((res) => {
+  const horaId = `${dateStr}_${minutes}`;
+  const bloqueoHora = { date: dateStr, minutes: Number(minutes), time: time, reason: motivo };
+  setDoc(doc(db, "bloqueosHoras", horaId), bloqueoHora)
+    .then(() => {
       btn.disabled = false;
       btn.textContent = "Bloquear hora";
-      if(!res.ok){ alert(res.message || "No se pudo bloquear esa hora."); return; }
       bloqueoHoraFecha.value = "";
       bloqueoHoraSelect.innerHTML = '<option value="">Elige una fecha primero</option>';
       document.getElementById("bloqueoHoraMotivo").value = "";
-      refreshDataFromServer(refreshBarberPanel);
+      apiPost("bloquearHora", bloqueoHora).catch(() => {});
     })
     .catch(() => {
       btn.disabled = false;
       btn.textContent = "Bloquear hora";
-      alert("No se pudo conectar. Intenta de nuevo.");
+      alert("No se pudo bloquear esa hora. Intenta de nuevo.");
     });
 });
 
@@ -1439,8 +1515,11 @@ function renderHorasBloqueadas(){
     unBtn.textContent = "Desbloquear";
     unBtn.addEventListener("click", () => {
       unBtn.disabled = true;
-      apiPost("desbloquearHora", { date: h.date, minutes: h.minutes })
-        .then(() => refreshDataFromServer(refreshBarberPanel))
+      const horaId = `${h.date}_${h.minutes}`;
+      deleteDoc(doc(db, "bloqueosHoras", horaId))
+        .then(() => {
+          apiPost("desbloquearHora", { date: h.date, minutes: h.minutes }).catch(() => {});
+        })
         .catch(() => { alert("No se pudo desbloquear. Intenta de nuevo."); unBtn.disabled = false; });
     });
     item.appendChild(unBtn);
@@ -1490,6 +1569,111 @@ historialFecha.addEventListener("change", () => {
 });
 
 /* =========================================================
+   MIGRACIÓN ÚNICA: Sheet (Apps Script) → Firestore
+   Trae todo lo que haya en el Google Sheet ahora mismo y lo
+   escribe en Firestore con los mismos IDs de documento que usa
+   el resto de la app (fecha_minutos para citas y horas, fecha
+   para días bloqueados) — así no se duplica nada si se corre
+   más de una vez.
+   ========================================================= */
+document.getElementById("btnMigrarHistorial").addEventListener("click", () => {
+  const ok = confirm(
+    "Esto va a traer TODO lo que hay ahora mismo en tu Google Sheet " +
+    "(citas y bloqueos) y guardarlo en Firestore. Úsalo solo la primera " +
+    "vez, después del cambio a Firestore. ¿Continuar?"
+  );
+  if(!ok) return;
+
+  const btn = document.getElementById("btnMigrarHistorial");
+  const resultado = document.getElementById("migracionResultado");
+  btn.disabled = true;
+  btn.textContent = "Migrando…";
+  resultado.textContent = "Consultando tu Google Sheet, puede tardar un momento…";
+
+  apiGet("getData")
+    .then((data) => {
+      const citas = data.citas || [];
+      const bloqueosDias = data.bloqueos || [];
+      const bloqueosHoras = data.horasBloqueadas || [];
+      const total = citas.length + bloqueosDias.length + bloqueosHoras.length;
+
+      if(total === 0){
+        resultado.textContent = "No se encontró nada en el Sheet para migrar.";
+        btn.disabled = false;
+        btn.textContent = "Migrar historial del Sheet a Firestore";
+        return;
+      }
+
+      resultado.textContent = `Escribiendo ${total} registro(s) en Firestore…`;
+
+      // Firestore permite hasta 500 operaciones por lote (writeBatch),
+      // así que si hay más, se reparten en varios lotes seguidos.
+      const operaciones = [];
+      citas.forEach((c) => {
+        const id = `${c.date}_${c.minutes}`;
+        operaciones.push({
+          ref: doc(db, "citas", id),
+          data: {
+            date: c.date, minutes: Number(c.minutes), time: c.time,
+            name: c.name, phone: c.phone, email: c.email || "",
+            status: c.status || "pendiente",
+            createdAt: c.createdAt || new Date().toISOString()
+          }
+        });
+      });
+      bloqueosDias.forEach((b) => {
+        operaciones.push({
+          ref: doc(db, "bloqueosDias", b.date),
+          data: { date: b.date, reason: b.reason || "" }
+        });
+      });
+      bloqueosHoras.forEach((h) => {
+        const id = `${h.date}_${h.minutes}`;
+        operaciones.push({
+          ref: doc(db, "bloqueosHoras", id),
+          data: { date: h.date, minutes: Number(h.minutes), time: h.time, reason: h.reason || "" }
+        });
+      });
+
+      const lotes = [];
+      for(let i = 0; i < operaciones.length; i += 450){
+        lotes.push(operaciones.slice(i, i + 450));
+      }
+
+      let loteIndex = 0;
+      function correrSiguienteLote(){
+        if(loteIndex >= lotes.length){
+          resultado.textContent = `Listo: se migraron ${total} registro(s) a Firestore.`;
+          btn.disabled = false;
+          btn.textContent = "Migrar historial del Sheet a Firestore";
+          return;
+        }
+        const batch = writeBatch(db);
+        lotes[loteIndex].forEach((op) => batch.set(op.ref, op.data));
+        batch.commit()
+          .then(() => {
+            loteIndex++;
+            resultado.textContent = `Migrando… (${Math.min(loteIndex * 450, total)}/${total})`;
+            correrSiguienteLote();
+          })
+          .catch((err) => {
+            console.error(err);
+            resultado.textContent = "Ocurrió un error a mitad de la migración. Puedes volver a darle al botón, es seguro repetirlo (no duplica nada).";
+            btn.disabled = false;
+            btn.textContent = "Migrar historial del Sheet a Firestore";
+          });
+      }
+      correrSiguienteLote();
+    })
+    .catch((err) => {
+      console.error(err);
+      resultado.textContent = "No se pudo consultar el Sheet. Revisa que WEBAPP_URL esté bien configurado e intenta de nuevo.";
+      btn.disabled = false;
+      btn.textContent = "Migrar historial del Sheet a Firestore";
+    });
+});
+
+/* =========================================================
    INSTALAR COMO APP (PWA)
    ========================================================= */
 const btnInstalarApp = document.getElementById("btnInstalarApp");
@@ -1531,7 +1715,8 @@ if(esIOS() && !yaEstaInstalada()){
    ARRANQUE
    ========================================================= */
 resetClientView();
-refreshDataFromServer(); // trae los datos apenas carga la página
+// Ya no hace falta pedir datos al cargar: en cuanto haya sesión activa,
+// onAuthStateChanged conecta las escuchas de Firestore automáticamente.
 </script>
 </body>
 </html>
