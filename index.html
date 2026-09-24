@@ -847,7 +847,7 @@ function detachFirestoreListeners(){
 // esté visible en pantalla en ese momento — sin volver a preguntarle
 // nada a Firestore, ya lo tenemos todo en memoria.
 function onLiveDataChanged(){
-  if(typeof fechaInput !== "undefined" && fechaInput && fechaInput.value){
+  if(typeof fechaInput !== "undefined" && fechaInput && fechaInput.value && !mostrandoConfirmacion){
     renderClientDay();
   }
   if(typeof barberUnlocked !== "undefined" && barberUnlocked){
@@ -974,6 +974,7 @@ nombreInput.addEventListener("input", updateButtonState);
 celularInput.addEventListener("input", updateButtonState);
 
 let selectedSlot = null;
+let mostrandoConfirmacion = false; // evita que la actualización en vivo de Firestore tape la tarjeta de confirmación
 
 function resetClientView(){
   fechaInput.value = "";
@@ -982,6 +983,7 @@ function resetClientView(){
     celularInput.value = "";
   }
   selectedSlot = null;
+  mostrandoConfirmacion = false;
   confirmCard.style.display = "none";
   formWrap.style.display = "none";
   slotsWrap.style.display = "none";
@@ -995,6 +997,7 @@ window.addEventListener("pageshow", resetClientView);
 // simplemente volvemos a pintar con lo que ya tenemos en memoria — al
 // instante, sin esperar ninguna respuesta de red.
 fechaInput.addEventListener("change", () => {
+  mostrandoConfirmacion = false; // el cliente eligió otra fecha a propósito
   renderClientDay();
 });
 
@@ -1116,6 +1119,7 @@ btnReservar.addEventListener("click", () => {
       formWrap.style.display = "none";
       slotsWrap.style.display = "none";
       diaInfo.style.display = "none";
+      mostrandoConfirmacion = true;
       confirmCard.style.display = "block";
       confirmCard.scrollIntoView({behavior:"smooth", block:"start"});
 
