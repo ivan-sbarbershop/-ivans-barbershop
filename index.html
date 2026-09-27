@@ -220,6 +220,28 @@
   .slot.taken{background:transparent; color:#584d43; border-style:dashed; text-decoration:line-through; cursor:not-allowed;}
   .slot.past{opacity:0.45; text-decoration:underline; border-style:dotted; cursor:not-allowed;}
 
+  .day-strip{
+    display:flex; gap:8px; overflow-x:auto; padding:6px 2px 12px; margin-bottom:4px;
+    scrollbar-width:thin; -webkit-overflow-scrolling:touch;
+  }
+  .day-strip::-webkit-scrollbar{height:5px;}
+  .day-strip::-webkit-scrollbar-thumb{background:var(--line); border-radius:10px;}
+  .day-cell{
+    flex:0 0 auto; min-width:66px; padding:10px 6px 8px; border-radius:12px;
+    border:1px solid var(--line); background:var(--panel-2); text-align:center;
+    cursor:pointer; transition:transform .1s ease;
+  }
+  .day-cell:active{transform:scale(0.95);}
+  .day-cell .dow{font-size:11px; color:var(--cream-dim); text-transform:uppercase; letter-spacing:.03em; font-weight:700;}
+  .day-cell.today .dow{color:var(--brass-bright);}
+  .day-cell .num{font-family:'Bebas Neue'; font-size:24px; color:var(--cream); line-height:1.15; letter-spacing:0.02em;}
+  .day-cell .cnt{font-size:10px; margin-top:3px; color:var(--brass-bright); font-weight:700;}
+  .day-cell.closed{opacity:0.4; cursor:not-allowed;}
+  .day-cell.closed .cnt{color:var(--red-bright);}
+  .day-cell.selected{background:var(--brass); border-color:var(--brass);}
+  .day-cell.selected .dow, .day-cell.selected .num{color:#20160a;}
+  .day-cell.selected .cnt{color:#3a2e10;}
+
   button.primary{
     width:100%; padding:15px; margin-top:16px; border:none; border-radius:10px;
     background:linear-gradient(180deg, var(--brass-bright), var(--brass));
@@ -400,8 +422,9 @@
     <div class="card locked" id="reservaCard">
       <h2>Reservar cita <span class="tag">Cliente</span></h2>
 
-      <label for="fecha">Elige el día</label>
-      <input type="date" id="fecha" autocomplete="off" disabled>
+      <label>Elige el día</label>
+      <div id="dayStrip" class="day-strip"></div>
+      <input type="hidden" id="fecha">
       <div id="diaInfo" class="day-note" style="display:none;"></div>
       <div id="cerradoMsg" class="closed-msg" style="display:none;"></div>
 
@@ -847,6 +870,9 @@ function detachFirestoreListeners(){
 // esté visible en pantalla en ese momento — sin volver a preguntarle
 // nada a Firestore, ya lo tenemos todo en memoria.
 function onLiveDataChanged(){
+  if(typeof renderDayStrip === "function"){
+    renderDayStrip();
+  }
   if(typeof fechaInput !== "undefined" && fechaInput && fechaInput.value && !mostrandoConfirmacion){
     renderClientDay();
   }
@@ -924,6 +950,81 @@ function apptDateTime(a){
   return d;
 }
 
+/* =========================================================
+   FRANJA DE DÍAS (reemplaza el calendario nativo): muestra un
+   mes completo hacia adelante, con cuántos cupos libres queda
+   en cada día, o "Cerrado" si el barbero bloqueó ese día entero.
+   ========================================================= */
+const DIAS_A_MOSTRAR = 30;
+
+// Cuenta cuántos horarios libres quedan ese día (o null si el día
+// está bloqueado por completo, para mostrar "Cerrado").
+function countAvailable(dateStr){
+  if(isBlocked(dateStr)) return null;
+
+  const allSlots = generateSlots(dateStr);
+  if(allSlots.length === 0) return null; // ese día de la semana no tiene horario definido
+
+  const taken = new Set(CITAS.filter(a => a.date === dateStr).map(a => a.minutes));
+  const bloqueadas = new Set(HORAS_BLOQUEADAS.filter(h => h.date === dateStr).map(h => h.minutes));
+  const isToday = dateStr === todayStr();
+  const now = new Date();
+  const nowMinutes = now.getHours() * 60 + now.getMinutes();
+
+  let count = 0;
+  allSlots.forEach(min => {
+    if(taken.has(min) || bloqueadas.has(min)) return;
+    if(isToday && min <= nowMinutes) return;
+    count++;
+  });
+  return count;
+}
+
+function renderDayStrip(){
+  const strip = document.getElementById("dayStrip");
+  if(!strip) return;
+
+  const hoy = todayStr();
+  const seleccionado = fechaInput.value;
+  const scrollLeftPrevio = strip.scrollLeft;
+  strip.innerHTML = "";
+
+  for(let i = 0; i < DIAS_A_MOSTRAR; i++){
+    const d = dateFromStr(hoy);
+    d.setDate(d.getDate() + i);
+    const dateStr = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+    const disponibles = countAvailable(dateStr);
+    const cerrado = disponibles === null;
+    const esHoy = dateStr === hoy;
+
+    const cell = document.createElement("div");
+    cell.className = "day-cell"
+      + (cerrado ? " closed" : "")
+      + (esHoy ? " today" : "")
+      + (dateStr === seleccionado ? " selected" : "");
+    cell.dataset.date = dateStr;
+    cell.innerHTML = `
+      <div class="dow">${esHoy ? "Hoy" : DIAS_ABREV[d.getDay()]}</div>
+      <div class="num">${d.getDate()}</div>
+      <div class="cnt">${cerrado ? "Cerrado" : disponibles + " libre" + (disponibles === 1 ? "" : "s")}</div>
+    `;
+    if(!cerrado){
+      cell.addEventListener("click", () => {
+        mostrandoConfirmacion = false; // el cliente eligió un día a propósito
+        fechaInput.value = dateStr;
+        renderClientDay();
+        renderDayStrip();
+        cell.scrollIntoView({behavior:"smooth", inline:"center", block:"nearest"});
+      });
+    }
+    strip.appendChild(cell);
+  }
+
+  // Al repintar (por ejemplo cuando llega una actualización en vivo),
+  // mantenemos la posición del scroll donde el cliente la dejó.
+  strip.scrollLeft = scrollLeftPrevio;
+}
+
 function getStatus(a){
   if(a.status === "realizada") return "realizada";
   if(apptDateTime(a) < new Date()) return "retrasada";
@@ -989,6 +1090,7 @@ function resetClientView(){
   slotsWrap.style.display = "none";
   diaInfo.style.display = "none";
   cerradoMsg.style.display = "none";
+  renderDayStrip();
   if(currentUser && currentProfile) applyProfileToForm();
 }
 window.addEventListener("pageshow", resetClientView);
@@ -1626,6 +1728,9 @@ if(esIOS() && !yaEstaInstalada()){
 resetClientView();
 // Ya no hace falta pedir datos al cargar: en cuanto haya sesión activa,
 // onAuthStateChanged conecta las escuchas de Firestore automáticamente.
+// La franja de días sí se pinta de una vez (aunque esté detrás del
+// candado de inicio de sesión), para que no se vea vacía.
+renderDayStrip();
 </script>
 </body>
 </html>
