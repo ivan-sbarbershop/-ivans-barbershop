@@ -443,7 +443,10 @@
     </div>
 
     <div class="card" id="confirmCard" style="display:none;">
-      <h2>¡Cita registrada!</h2>
+      <h2>¡Tu cita ha sido confirmada!</h2>
+      <div class="day-note" style="margin-bottom:12px; color:var(--cream); font-size:14px;">
+        Tu horario quedó reservado con éxito. Puedes estar tranquilo, ya te estamos esperando. 💈
+      </div>
       <div class="confirm">
         <div class="check">✓</div>
         <div class="row"><span>Barbería</span><span>Ivan's Barbershop</span></div>
@@ -452,7 +455,7 @@
         <div class="row"><span>Día</span><span id="cFecha"></span></div>
         <div class="row"><span>Hora</span><span id="cHora"></span></div>
       </div>
-      <div class="day-note" style="margin-top:14px;">Dale clic al botón para enviarle al barbero la confirmación de tu cita por WhatsApp.</div>
+      <div class="day-note" style="margin-top:14px;">Para que el barbero quede avisado al instante, dale clic al botón y envíale la confirmación por WhatsApp.</div>
       <a class="whatsapp-btn" id="btnConfirmarWhatsapp" target="_blank">
         <svg viewBox="0 0 32 32" width="22" height="22" aria-hidden="true">
           <path fill="#fff" d="M16 3C9.096 3 3.5 8.596 3.5 15.5c0 2.38.664 4.61 1.816 6.51L3 29l7.16-2.276A12.44 12.44 0 0 0 16 28c6.904 0 12.5-5.596 12.5-12.5S22.904 3 16 3zm0 22.727a10.19 10.19 0 0 1-5.19-1.42l-.372-.222-4.25 1.352 1.375-4.144-.242-.386A10.19 10.19 0 0 1 5.773 15.5C5.773 9.845 10.345 5.273 16 5.273S26.227 9.845 26.227 15.5 21.655 25.727 16 25.727z"/>
@@ -779,6 +782,7 @@ function updateClientGate(){
   }else{
     gate.style.display = "block";
     reserva.classList.add("locked");
+    reserva.style.display = "";
     fechaInput.disabled = true;
     confirmCard.style.display = "none";
   }
@@ -1085,6 +1089,7 @@ function resetClientView(){
   }
   selectedSlot = null;
   mostrandoConfirmacion = false;
+  document.getElementById("reservaCard").style.display = "";
   confirmCard.style.display = "none";
   formWrap.style.display = "none";
   slotsWrap.style.display = "none";
@@ -1222,8 +1227,9 @@ btnReservar.addEventListener("click", () => {
       slotsWrap.style.display = "none";
       diaInfo.style.display = "none";
       mostrandoConfirmacion = true;
+      document.getElementById("reservaCard").style.display = "none";
       confirmCard.style.display = "block";
-      confirmCard.scrollIntoView({behavior:"smooth", block:"start"});
+      window.scrollTo({top:0, behavior:"smooth"});
 
       // Copia de respaldo hacia Apps Script (correo al barbero, correo al
       // cliente, fila en el Sheet), en SEGUNDO PLANO. Si falla, no le
