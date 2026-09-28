@@ -498,8 +498,9 @@
 
       <div class="card">
         <h2>Resumen de citas <span class="tag">Barbero</span></h2>
-        <label for="resumenFecha">Filtrar por fecha</label>
-        <input type="date" id="resumenFecha">
+        <label>Elige el día</label>
+        <div id="resumenStrip" class="day-strip"></div>
+        <input type="hidden" id="resumenFecha">
         <div id="listaCitas"></div>
       </div>
 
@@ -1345,10 +1346,62 @@ function playBeep(){
   }catch(e){ /* si el navegador bloquea el sonido, no pasa nada grave */ }
 }
 
+// Franja de días del panel del barbero: igual a la del cliente, pero en
+// vez de cupos libres muestra cuántas citas por atender hay cada día.
+function renderResumenStrip(){
+  const strip = document.getElementById("resumenStrip");
+  if(!strip) return;
+  const hoy = todayStr();
+  const seleccionado = resumenFecha.value;
+  const scrollPrevio = strip.scrollLeft;
+  strip.innerHTML = "";
+
+  const pendientes = CITAS.filter(a => getStatus(a) !== "realizada");
+
+  function crearCelda(dateStr, dow, num, cantidad, bloqueado){
+    const cell = document.createElement("div");
+    cell.className = "day-cell"
+      + (dateStr === hoy ? " today" : "")
+      + (dateStr === seleccionado ? " selected" : "");
+    const texto = bloqueado ? "Bloqueado" : cantidad + (cantidad === 1 ? " cita" : " citas");
+    cell.innerHTML = `
+      <div class="dow">${dow}</div>
+      <div class="num">${num}</div>
+      <div class="cnt"${bloqueado ? ' style="color:var(--red-bright);"' : ""}>${texto}</div>
+    `;
+    cell.addEventListener("click", () => {
+      resumenFecha.value = dateStr;
+      renderResumenStrip();
+      renderListaCitas();
+      cell.scrollIntoView({behavior:"smooth", inline:"center", block:"nearest"});
+    });
+    return cell;
+  }
+
+  // Primera celda: todas las citas pendientes juntas
+  strip.appendChild(crearCelda("", "Todas", "∞", pendientes.length, false));
+
+  for(let i = 0; i < DIAS_A_MOSTRAR; i++){
+    const d = dateFromStr(hoy);
+    d.setDate(d.getDate() + i);
+    const dateStr = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+    const cantidad = pendientes.filter(a => a.date === dateStr).length;
+    strip.appendChild(crearCelda(
+      dateStr,
+      dateStr === hoy ? "Hoy" : DIAS_ABREV[d.getDay()],
+      d.getDate(),
+      cantidad,
+      !!isBlocked(dateStr)
+    ));
+  }
+  strip.scrollLeft = scrollPrevio;
+}
+
 function refreshBarberPanel(){
   if(!barberUnlocked) return;
   checkForNewCitas();
   renderStats();
+  renderResumenStrip();
   renderListaCitas();
   renderBloqueos();
   renderHorasBloqueadas();
