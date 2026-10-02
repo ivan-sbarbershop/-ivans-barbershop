@@ -242,6 +242,20 @@
   .day-cell.selected .dow, .day-cell.selected .num{color:#20160a;}
   .day-cell.selected .cnt{color:#3a2e10;}
 
+  .festivo-banner{
+    background:rgba(179,39,42,0.12); border:1px solid rgba(179,39,42,0.4);
+    border-radius:10px; padding:10px 12px; margin:10px 0 14px;
+    display:flex; flex-direction:column; gap:8px; font-size:13px; color:var(--cream);
+  }
+  .festivo-banner button{width:100%;}
+
+  .mis-cita-row{
+    background:var(--panel-2); border:1px solid var(--line); border-radius:8px;
+    padding:9px 12px; margin-bottom:6px; font-size:13px; color:var(--cream);
+  }
+  .mis-cita-row:last-child{margin-bottom:0;}
+  .mis-cita-row b{color:var(--brass-bright);}
+
   button.primary{
     width:100%; padding:15px; margin-top:16px; border:none; border-radius:10px;
     background:linear-gradient(180deg, var(--brass-bright), var(--brass));
@@ -296,10 +310,24 @@
     padding:12px; margin-bottom:8px; display:flex; justify-content:space-between; align-items:center; gap:10px;
     flex-wrap:wrap;
   }
+  .appt-item .info{flex:1; min-width:180px;}
   .appt-item .info b{display:block; font-size:14px; color:var(--cream);}
   .appt-item .info span{font-size:12px; color:var(--cream-dim);}
+  .appt-item .info .line1{font-size:14px; color:var(--cream); display:flex; align-items:center; gap:8px; flex-wrap:wrap;}
+  .appt-item .info .line2{font-size:12px; color:var(--cream-dim); margin-top:4px;}
   .appt-item .right{display:flex; flex-direction:column; align-items:flex-end; gap:6px;}
   .appt-item .when{font-size:12px; color:var(--brass); font-weight:700; white-space:nowrap; text-align:right;}
+  .appt-item .actions{display:flex; gap:6px; flex:0 0 auto;}
+  .icon-btn{
+    width:34px; height:34px; border-radius:50%; border:1px solid var(--line);
+    display:flex; align-items:center; justify-content:center; cursor:pointer;
+    font-size:15px; font-weight:800; background:var(--panel); flex:0 0 auto;
+    text-decoration:none;
+  }
+  .icon-btn:active{transform:scale(0.93);}
+  .icon-btn.ok{background:rgba(95,143,91,0.18); border-color:rgba(95,143,91,0.5); color:#9fce9a;}
+  .icon-btn.no{background:rgba(179,39,42,0.18); border-color:rgba(179,39,42,0.5); color:#e79c86;}
+  .icon-btn.wa{background:rgba(37,163,91,0.2); border-color:rgba(37,163,91,0.5); color:#59d98a;}
   .badge{
     font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:0.06em;
     padding:3px 9px; border-radius:20px; white-space:nowrap;
@@ -419,6 +447,12 @@
       <button class="secondary" id="btnAuthGateRegister">Crear cuenta gratis</button>
     </div>
 
+    <div class="card" id="misCitasCard" style="display:none;">
+      <h2 id="misCitasTitulo">Ya tienes una cita agendada</h2>
+      <div id="misCitasLista"></div>
+      <div class="day-note" style="margin-top:10px;">Si quieres otra cita, completa el formulario de abajo. Para cambiar o cancelar una, escríbenos por WhatsApp.</div>
+    </div>
+
     <div class="card locked" id="reservaCard">
       <h2>Reservar cita <span class="tag">Cliente</span></h2>
 
@@ -501,6 +535,7 @@
         <label>Elige el día</label>
         <div id="resumenStrip" class="day-strip"></div>
         <input type="hidden" id="resumenFecha">
+        <div id="festivoBanner" class="festivo-banner" style="display:none;"></div>
         <div id="listaCitas"></div>
       </div>
 
@@ -744,6 +779,8 @@ function friendlyAuthError(code){
   return map[code] || "Ocurrió un error. Intenta de nuevo.";
 }
 
+let misCitasTimer = null;
+
 onAuthStateChanged(auth, (user) => {
   currentUser = user;
   if(user){
@@ -753,10 +790,16 @@ onAuthStateChanged(auth, (user) => {
       applyProfileToForm();
     });
     attachFirestoreListeners();
+    if(misCitasTimer) clearInterval(misCitasTimer);
+    // Revisa cada minuto si alguna de sus citas ya pasó de hora, para
+    // que el aviso desaparezca solo sin tener que recargar la página.
+    misCitasTimer = setInterval(() => { if(typeof renderMisCitasAviso === "function") renderMisCitasAviso(); }, 60000);
   }else{
     currentProfile = null;
     detachFirestoreListeners();
     renderAuthBar();
+    if(misCitasTimer){ clearInterval(misCitasTimer); misCitasTimer = null; }
+    if(typeof renderMisCitasAviso === "function") renderMisCitasAviso();
   }
 });
 
@@ -809,6 +852,7 @@ document.getElementById("btnAuthOpen").addEventListener("click", () => openAuthM
 let CITAS = [];
 let BLOQUEOS = [];
 let HORAS_BLOQUEADAS = [];
+let FESTIVOS_HABILITADOS = [];
 let dataLoaded = false;
 
 /* =========================================================
@@ -837,7 +881,7 @@ function apiPost(action, payload){
    y reservas — instantáneo, sin los "cuelgues" que daba Apps Script
    con varias personas consultando a la vez)
    ========================================================= */
-let unsubCitas = null, unsubBloqueosDias = null, unsubBloqueosHoras = null;
+let unsubCitas = null, unsubBloqueosDias = null, unsubBloqueosHoras = null, unsubFestivos = null;
 
 function attachFirestoreListeners(){
   if(unsubCitas) return; // ya están activas, no duplicar
@@ -859,14 +903,22 @@ function attachFirestoreListeners(){
     HORAS_BLOQUEADAS = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     onLiveDataChanged();
   }, (err) => console.error(err));
+
+  // Festivos que el barbero decidió habilitar manualmente (ver más abajo
+  // el cálculo de festivos colombianos).
+  unsubFestivos = onSnapshot(collection(db, "festivosHabilitados"), (snap) => {
+    FESTIVOS_HABILITADOS = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    onLiveDataChanged();
+  }, (err) => console.error(err));
 }
 
 function detachFirestoreListeners(){
   if(unsubCitas) unsubCitas();
   if(unsubBloqueosDias) unsubBloqueosDias();
   if(unsubBloqueosHoras) unsubBloqueosHoras();
-  unsubCitas = unsubBloqueosDias = unsubBloqueosHoras = null;
-  CITAS = []; BLOQUEOS = []; HORAS_BLOQUEADAS = [];
+  if(unsubFestivos) unsubFestivos();
+  unsubCitas = unsubBloqueosDias = unsubBloqueosHoras = unsubFestivos = null;
+  CITAS = []; BLOQUEOS = []; HORAS_BLOQUEADAS = []; FESTIVOS_HABILITADOS = [];
   dataLoaded = false;
 }
 
@@ -877,6 +929,9 @@ function detachFirestoreListeners(){
 function onLiveDataChanged(){
   if(typeof renderDayStrip === "function"){
     renderDayStrip();
+  }
+  if(typeof renderMisCitasAviso === "function"){
+    renderMisCitasAviso();
   }
   if(typeof fechaInput !== "undefined" && fechaInput && fechaInput.value && !mostrandoConfirmacion){
     renderClientDay();
@@ -917,13 +972,105 @@ function minutesToLabel(min){
 
 function dateFromStr(str){ return new Date(str + "T00:00:00"); }
 
+/* =========================================================
+   FESTIVOS DE COLOMBIA (se calculan solos, para todos los años,
+   sin tener que guardarlos a mano uno por uno)
+   ========================================================= */
+// Domingo de Pascua de ese año (algoritmo de Gauss/Meeus, el mismo que
+// usan los calendarios oficiales para ubicar la Semana Santa cada año).
+function domingoDePascua(year){
+  const a = year % 19;
+  const b = Math.floor(year / 100);
+  const c = year % 100;
+  const d = Math.floor(b / 4);
+  const e = b % 4;
+  const f = Math.floor((b + 8) / 25);
+  const g = Math.floor((b - f + 1) / 3);
+  const h = (19*a + b - d - g + 15) % 30;
+  const i = Math.floor(c / 4);
+  const k = c % 4;
+  const l = (32 + 2*e + 2*i - h - k) % 7;
+  const m = Math.floor((a + 11*h + 22*l) / 451);
+  const mes = Math.floor((h + l - 7*m + 114) / 31); // 3 = marzo, 4 = abril
+  const dia = ((h + l - 7*m + 114) % 31) + 1;
+  return new Date(year, mes - 1, dia);
+}
+
+function sumarDias(date, dias){
+  const d = new Date(date);
+  d.setDate(d.getDate() + dias);
+  return d;
+}
+
+// "Ley Emiliani": estos festivos se trasladan al lunes siguiente si no
+// caen ya en lunes.
+function trasladarALunes(date){
+  const d = new Date(date);
+  const diaSemana = d.getDay(); // 0 = domingo
+  if(diaSemana === 1) return d;
+  const diff = (8 - diaSemana) % 7 || 7;
+  d.setDate(d.getDate() + diff);
+  return d;
+}
+
+function fechaISO(d){
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+}
+
+const _festivosPorAno = {};
+function festivosColombia(year){
+  if(_festivosPorAno[year]) return _festivosPorAno[year];
+
+  const set = new Set();
+  // Festivos de fecha fija.
+  [[0,1],[4,1],[6,20],[7,7],[11,8],[11,25]].forEach(([mes,dia]) => {
+    set.add(fechaISO(new Date(year, mes, dia)));
+  });
+  // Festivos que se trasladan al lunes siguiente (Ley Emiliani).
+  [[0,6],[2,19],[5,29],[7,15],[9,12],[10,1],[10,11]].forEach(([mes,dia]) => {
+    set.add(fechaISO(trasladarALunes(new Date(year, mes, dia))));
+  });
+  // Festivos que dependen de la Semana Santa.
+  const pascua = domingoDePascua(year);
+  set.add(fechaISO(sumarDias(pascua, -3))); // Jueves Santo
+  set.add(fechaISO(sumarDias(pascua, -2))); // Viernes Santo
+  set.add(fechaISO(trasladarALunes(sumarDias(pascua, 39)))); // Ascensión del Señor
+  set.add(fechaISO(trasladarALunes(sumarDias(pascua, 60)))); // Corpus Christi
+  set.add(fechaISO(trasladarALunes(sumarDias(pascua, 68)))); // Sagrado Corazón de Jesús
+
+  _festivosPorAno[year] = set;
+  return set;
+}
+
+function esFestivo(dateStr){
+  const year = Number(dateStr.slice(0, 4));
+  return festivosColombia(year).has(dateStr);
+}
+
+function festivoHabilitado(dateStr){
+  return FESTIVOS_HABILITADOS.some(f => f.id === dateStr);
+}
+
+// Devuelve null si el día está abierto, o un objeto describiendo por qué
+// está cerrado ({festivo:true} o {festivo:false} si es un bloqueo manual).
+function diaCerradoInfo(dateStr){
+  if(esFestivo(dateStr) && !festivoHabilitado(dateStr)) return { festivo: true };
+  if(BLOQUEOS.find(b => b.date === dateStr)) return { festivo: false };
+  return null;
+}
+
 function isBlocked(dateStr){
-  return BLOQUEOS.find(b => b.date === dateStr);
+  return !!diaCerradoInfo(dateStr);
 }
 
 function prettyDate(dateStr){
   const d = dateFromStr(dateStr);
   return `${DIAS[d.getDay()]} ${d.getDate()} de ${MESES[d.getMonth()]} de ${d.getFullYear()}`;
+}
+
+function prettyDateComma(dateStr){
+  const d = dateFromStr(dateStr);
+  return `${DIAS[d.getDay()]}, ${d.getDate()} de ${MESES[d.getMonth()]}`;
 }
 
 function shortDateLabel(dateStr){
@@ -1001,6 +1148,10 @@ function renderDayStrip(){
     const disponibles = countAvailable(dateStr);
     const cerrado = disponibles === null;
     const esHoy = dateStr === hoy;
+    const info = cerrado ? diaCerradoInfo(dateStr) : null;
+    const etiqueta = cerrado
+      ? (info && info.festivo ? "Festivo" : "Cerrado")
+      : disponibles + " libre" + (disponibles === 1 ? "" : "s");
 
     const cell = document.createElement("div");
     cell.className = "day-cell"
@@ -1011,7 +1162,7 @@ function renderDayStrip(){
     cell.innerHTML = `
       <div class="dow">${esHoy ? "Hoy" : DIAS_ABREV[d.getDay()]}</div>
       <div class="num">${d.getDate()}</div>
-      <div class="cnt">${cerrado ? "Cerrado" : disponibles + " libre" + (disponibles === 1 ? "" : "s")}</div>
+      <div class="cnt">${etiqueta}</div>
     `;
     if(!cerrado){
       cell.addEventListener("click", () => {
@@ -1028,6 +1179,42 @@ function renderDayStrip(){
   // Al repintar (por ejemplo cuando llega una actualización en vivo),
   // mantenemos la posición del scroll donde el cliente la dejó.
   strip.scrollLeft = scrollLeftPrevio;
+}
+
+// Aviso de "ya tienes cita agendada" apenas el cliente entra — para que
+// no se le olvide que ya reservó, aunque no recuerde la hora exacta.
+// Se oculta solo en cuanto pasa la hora de la cita, y no muestra nada si
+// no tiene ninguna próxima.
+function renderMisCitasAviso(){
+  const card = document.getElementById("misCitasCard");
+  const lista = document.getElementById("misCitasLista");
+  if(!card || !lista) return;
+
+  if(!currentUser || mostrandoConfirmacion){
+    card.style.display = "none";
+    return;
+  }
+
+  const ahora = new Date();
+  const propias = CITAS.filter(a =>
+    a.email && currentUser.email
+    && a.email.toLowerCase() === currentUser.email.toLowerCase()
+    && getStatus(a) !== "realizada"
+    && apptDateTime(a) > ahora
+  ).sort((a, b) => apptDateTime(a) - apptDateTime(b));
+
+  if(propias.length === 0){
+    card.style.display = "none";
+    lista.innerHTML = "";
+    return;
+  }
+
+  card.style.display = "block";
+  document.getElementById("misCitasTitulo").textContent =
+    `Ya tienes ${propias.length} ${propias.length === 1 ? "cita agendada" : "citas agendadas"}`;
+  lista.innerHTML = propias.map(a =>
+    `<div class="mis-cita-row"><b>${prettyDateComma(a.date)}</b>, ${a.time}</div>`
+  ).join("");
 }
 
 function getStatus(a){
@@ -1097,6 +1284,7 @@ function resetClientView(){
   diaInfo.style.display = "none";
   cerradoMsg.style.display = "none";
   renderDayStrip();
+  renderMisCitasAviso();
   if(currentUser && currentProfile) applyProfileToForm();
 }
 window.addEventListener("pageshow", resetClientView);
@@ -1358,12 +1546,15 @@ function renderResumenStrip(){
 
   const pendientes = CITAS.filter(a => getStatus(a) !== "realizada");
 
-  function crearCelda(dateStr, dow, num, cantidad, bloqueado){
+  function crearCelda(dateStr, dow, num, cantidad, info){
     const cell = document.createElement("div");
+    const bloqueado = !!info;
     cell.className = "day-cell"
       + (dateStr === hoy ? " today" : "")
       + (dateStr === seleccionado ? " selected" : "");
-    const texto = bloqueado ? "Bloqueado" : cantidad + (cantidad === 1 ? " cita" : " citas");
+    const texto = bloqueado
+      ? (info.festivo ? "Festivo" : "Bloqueado")
+      : cantidad + (cantidad === 1 ? " cita" : " citas");
     cell.innerHTML = `
       <div class="dow">${dow}</div>
       <div class="num">${num}</div>
@@ -1373,13 +1564,14 @@ function renderResumenStrip(){
       resumenFecha.value = dateStr;
       renderResumenStrip();
       renderListaCitas();
+      renderFestivoBanner();
       cell.scrollIntoView({behavior:"smooth", inline:"center", block:"nearest"});
     });
     return cell;
   }
 
   // Primera celda: todas las citas pendientes juntas
-  strip.appendChild(crearCelda("", "Todas", "∞", pendientes.length, false));
+  strip.appendChild(crearCelda("", "Todas", "∞", pendientes.length, null));
 
   for(let i = 0; i < DIAS_A_MOSTRAR; i++){
     const d = dateFromStr(hoy);
@@ -1391,10 +1583,42 @@ function renderResumenStrip(){
       dateStr === hoy ? "Hoy" : DIAS_ABREV[d.getDay()],
       d.getDate(),
       cantidad,
-      !!isBlocked(dateStr)
+      diaCerradoInfo(dateStr)
     ));
   }
   strip.scrollLeft = scrollPrevio;
+}
+
+// Si el día elegido en el resumen es un festivo, muestra un aviso con un
+// botón para habilitarlo (o para volver a cerrarlo si ya estaba habilitado).
+function renderFestivoBanner(){
+  const el = document.getElementById("festivoBanner");
+  if(!el) return;
+  const dateStr = resumenFecha.value;
+
+  if(!dateStr || !esFestivo(dateStr)){
+    el.style.display = "none";
+    el.innerHTML = "";
+    return;
+  }
+
+  const habilitado = festivoHabilitado(dateStr);
+  el.style.display = "flex";
+  el.innerHTML = habilitado
+    ? `<span>✅ ${prettyDate(dateStr)} es festivo, pero lo habilitaste para atender.</span>
+       <button class="secondary" id="btnToggleFestivo">Volver a cerrar este día</button>`
+    : `<span>📅 ${prettyDate(dateStr)} es festivo — por defecto aparece cerrado.</span>
+       <button class="primary" id="btnToggleFestivo">Habilitar este día</button>`;
+
+  document.getElementById("btnToggleFestivo").addEventListener("click", () => {
+    const btn = document.getElementById("btnToggleFestivo");
+    btn.disabled = true;
+    btn.textContent = "Guardando…";
+    const accion = habilitado
+      ? deleteDoc(doc(db, "festivosHabilitados", dateStr))
+      : setDoc(doc(db, "festivosHabilitados", dateStr), { date: dateStr });
+    accion.catch(() => alert("No se pudo actualizar. Intenta de nuevo."));
+  });
 }
 
 function refreshBarberPanel(){
@@ -1402,6 +1626,7 @@ function refreshBarberPanel(){
   checkForNewCitas();
   renderStats();
   renderResumenStrip();
+  renderFestivoBanner();
   renderListaCitas();
   renderBloqueos();
   renderHorasBloqueadas();
@@ -1462,47 +1687,64 @@ function renderListaCitas(){
       const item = document.createElement("div");
       item.className = "appt-item";
       item.innerHTML = `
-        <div class="info"><b>${escapeHtml(a.name)}</b><span>${escapeHtml(a.phone)}</span></div>
-        <div class="right">
-          <div class="when">${a.time}</div>
-          <select class="badge badge-select ${status}" data-id="${a.id}">
-            <option value="pendiente" ${status === "pendiente" ? "selected" : ""}>Pendiente</option>
-            <option value="retrasada" ${status === "retrasada" ? "selected" : ""}>Retrasada</option>
-            <option value="realizada" ${status === "realizada" ? "selected" : ""}>Realizada</option>
-          </select>
+        <div class="info">
+          <div class="line1"><b>${a.time} — ${escapeHtml(a.name)}</b> <span class="badge ${status}">${status === "retrasada" ? "Retrasada" : "Pendiente"}</span></div>
+          <div class="line2">📅 ${shortDateLabel(a.date)} &nbsp; 📞 ${escapeHtml(a.phone)}</div>
         </div>
+        <div class="actions"></div>
       `;
-      const delBtn = document.createElement("button");
-      delBtn.className = "danger";
-      delBtn.textContent = "Cancelar";
-      delBtn.addEventListener("click", () => {
+      const actions = item.querySelector(".actions");
+
+      const okBtn = document.createElement("button");
+      okBtn.className = "icon-btn ok";
+      okBtn.title = "Marcar como realizada";
+      okBtn.type = "button";
+      okBtn.textContent = "✓";
+      okBtn.addEventListener("click", () => {
+        okBtn.disabled = true;
+        updateDoc(doc(db, "citas", a.id), { status: "realizada" })
+          .then(() => { apiPost("actualizarEstado", { id: a.id, status: "realizada" }).catch(() => {}); })
+          .catch(() => { alert("No se pudo actualizar. Intenta de nuevo."); okBtn.disabled = false; });
+      });
+
+      const noBtn = document.createElement("button");
+      noBtn.className = "icon-btn no";
+      noBtn.title = "Cancelar cita";
+      noBtn.type = "button";
+      noBtn.textContent = "✗";
+      noBtn.addEventListener("click", () => {
         if(confirm(`¿Cancelar la cita de ${a.name} el ${prettyDate(a.date)} a las ${a.time}?`)){
-          delBtn.disabled = true;
+          noBtn.disabled = true;
           deleteDoc(doc(db, "citas", a.id))
-            .then(() => {
-              apiPost("cancelarCita", { id: a.id }).catch(() => {});
-            })
-            .catch(() => { alert("No se pudo cancelar. Intenta de nuevo."); delBtn.disabled = false; });
+            .then(() => { apiPost("cancelarCita", { id: a.id }).catch(() => {}); })
+            .catch(() => { alert("No se pudo cancelar. Intenta de nuevo."); noBtn.disabled = false; });
         }
       });
-      item.querySelector(".right").appendChild(delBtn);
+
+      const waBtn = document.createElement("a");
+      waBtn.className = "icon-btn wa";
+      waBtn.title = "Enviar WhatsApp al cliente";
+      waBtn.target = "_blank";
+      waBtn.rel = "noopener";
+      const mensajeWa = `Hola ${a.name}, te escribo de Ivan's Barbershop sobre tu cita de las ${a.time}.`;
+      waBtn.href = `https://wa.me/${phoneToWhatsapp(a.phone)}?text=${encodeURIComponent(mensajeWa)}`;
+      waBtn.innerHTML = '<svg viewBox="0 0 32 32" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M16 3C9.096 3 3.5 8.596 3.5 15.5c0 2.38.664 4.61 1.816 6.51L3 29l7.16-2.276A12.44 12.44 0 0 0 16 28c6.904 0 12.5-5.596 12.5-12.5S22.904 3 16 3zm0 22.727a10.19 10.19 0 0 1-5.19-1.42l-.372-.222-4.25 1.352 1.375-4.144-.242-.386A10.19 10.19 0 0 1 5.773 15.5C5.773 9.845 10.345 5.273 16 5.273S26.227 9.845 26.227 15.5 21.655 25.727 16 25.727z"/><path fill="currentColor" d="M21.62 18.11c-.306-.153-1.81-.893-2.09-.995-.28-.102-.484-.153-.688.154-.204.306-.79.994-.968 1.199-.178.204-.357.23-.663.077-.306-.153-1.293-.477-2.464-1.52-.911-.812-1.526-1.815-1.705-2.121-.178-.306-.019-.472.134-.624.138-.138.306-.357.459-.536.153-.178.204-.306.306-.51.102-.204.051-.383-.026-.536-.077-.153-.688-1.658-.943-2.27-.248-.596-.5-.515-.688-.525-.178-.008-.382-.01-.586-.01-.204 0-.535.077-.816.383-.28.306-1.07 1.046-1.07 2.55 0 1.505 1.096 2.96 1.249 3.164.153.204 2.158 3.295 5.229 4.622.73.315 1.3.503 1.744.644.733.233 1.4.2 1.928.121.588-.088 1.81-.74 2.065-1.454.255-.714.255-1.327.178-1.454-.076-.128-.28-.204-.586-.357z"/></svg>';
+
+      actions.appendChild(okBtn);
+      actions.appendChild(noBtn);
+      actions.appendChild(waBtn);
       wrap.appendChild(item);
     });
   });
 }
 
-// El barbero cambia el estado de una cita (pendiente / retrasada / realizada)
-document.getElementById("listaCitas").addEventListener("change", (e) => {
-  if(!e.target.classList.contains("badge-select")) return;
-  const id = e.target.dataset.id;
-  const val = e.target.value;
-  e.target.disabled = true;
-  updateDoc(doc(db, "citas", id), { status: val })
-    .then(() => {
-      apiPost("actualizarEstado", { id: id, status: val }).catch(() => {});
-    })
-    .catch(() => { alert("No se pudo actualizar el estado. Intenta de nuevo."); e.target.disabled = false; });
-});
+// Convierte el celular que escribió el cliente a formato internacional
+// para abrir WhatsApp (asume Colombia si no trae indicativo de país).
+function phoneToWhatsapp(raw){
+  let digits = String(raw || "").replace(/\D/g, "");
+  if(digits.length === 10) digits = "57" + digits;
+  return digits;
+}
 
 /* --- Disponibilidad por fecha --- */
 const fechaConsulta = document.getElementById("fechaConsulta");
